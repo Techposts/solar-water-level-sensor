@@ -20,19 +20,19 @@ logger:
 # Enable Home Assistant API
 api:
   encryption:
-    key: "jZ4iE6+HEbIKOrNp19q85vQi4BQ9bZf312Q4SNjIamQ="
+    key: "jZ4iE6+HEZf312Q4SNjIamQ="
 
 ota:
   - platform: esphome
-    password: "f4e32e4e0d6930781b5aa5710c1c257e"
+    password: "f4e32e4e0dc1c257e"
 
 wifi:
   ssid: "Terrace_EXT"
-  password: "9716582452"
+  password: "9712"
   # Enable fallback hotspot (captive portal) in case wifi connection fails
   ap:
     ssid: "Waterlevelesp32C3"
-    password: "9716582452"
+    password: "9752"
 
 captive_portal:
 
