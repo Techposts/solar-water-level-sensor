@@ -1,0 +1,150 @@
+alias: Water Tank Level Indicator
+description: >-
+  Tracks water tank level and provides indicators with phone and Alexa
+  notifications (with cooldown)
+triggers:
+  - entity_id: sensor.waterlevelesp32c3_sweet_water_storage
+    trigger: state
+  - event: start
+    trigger: homeassistant
+conditions: []
+actions:
+  - data:
+      entity_id: input_text.tank_level_status
+      value: "{{ level_status }}"
+    action: input_text.set_value
+  - data:
+      entity_id: input_datetime.tank_level_last_updated
+      datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+    action: input_datetime.set_datetime
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: "{{ should_notify }}"
+        sequence:
+          - data:
+              entity_id: input_datetime.tank_notification_cooldown
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+            action: input_datetime.set_datetime
+          - data:
+              title: "💧 Water Tank Status: {{ level_status }}"
+              message: >-
+                Water level is now {{ current_level }}% ({{ level_status }}). 
+                {% if level_status == 'Critical' %}Please refill the tank
+                soon!{%  elif level_status == 'Full' %}Tank is now full.{% endif
+                %}
+              data:
+                importance: >-
+                  {{ 'high' if level_status in ['Critical', 'Low'] else 'normal'
+                  }}
+                channel: >-
+                  {{ 'Water System Alerts' if level_status == 'Critical' else
+                  'Water System Warnings' if level_status == 'Low' else 'Water
+                  System Status' }}
+                icon_url: >-
+                  {% if level_status == 'Critical' %}mdi:water-alert {% elif
+                  level_status == 'Low' %}mdi:water-minus {% elif level_status
+                  == 'Medium' %}mdi:water-half {% elif level_status == 'Good'
+                  %}mdi:water-plus {% elif level_status == 'Full' %}mdi:water {%
+                  else %}mdi:water-question{% endif %}
+            action: notify.mobile_app_ravis_iphone
+          - data:
+              target:
+                - media_player.ravi_s_echo_dot
+                - media_player.echo_show_5
+                - media_player.ravi_s_old_echo_dot
+              message: "{{ alexa_message }}"
+              data:
+                type: tts
+            action: notify.alexa_media
+  - choose:
+      - conditions:
+          - condition: template
+            value_template: |-
+              {{ level_status == 'Critical' and 
+                 previous_level > current_level and
+                 previous_level - current_level >= 2 and
+                 critical_cooldown_passed }}
+        sequence:
+          - data:
+              entity_id: input_datetime.tank_notification_cooldown
+              datetime: "{{ now().strftime('%Y-%m-%d %H:%M:%S') }}"
+            action: input_datetime.set_datetime
+          - data:
+              title: ⚠️ CRITICAL Water Level Alert
+              message: >-
+                Water tank level has dropped to {{ current_level }}%. Tank is 
+                critically low and continuing to decrease!
+              data:
+                importance: high
+                ttl: 0
+                priority: high
+                channel: Water System Alerts
+            action: notify.mobile_app_ravis_iphone
+          - data:
+              target:
+                - media_player.ravi_s_echo_dot
+                - media_player.echo_show_5
+                - media_player.ravi_s_old_echo_dot
+              message: >-
+                Warning! Water tank is critically low at {{ current_level }}%. 
+                Please check for leaks or refill immediately.  चेतावनी! पानी की
+                टंकी बहुत कम है और लगातार घट रही है।
+              data:
+                type: tts
+            action: notify.alexa_media
+  - event: tank_empty
+    event_data: {}
+variables:
+  current_level: "{{ states('sensor.waterlevelesp32c3_sweet_water_storage') | float(0) }}"
+  previous_level: >-
+    {{ trigger.from_state.state | float(0) if trigger.from_state is not none
+    else 0 }}
+  level_status: |-
+    {% if current_level >= 90 %}
+      Full
+    {% elif current_level >= 75 %}
+      Good
+    {% elif current_level >= 50 %}
+      Medium
+    {% elif current_level >= 25 %}
+      Low
+    {% elif current_level >= 10 %}
+      Critical
+    {% else %}
+      Empty
+    {% endif %}
+  previous_status: "{{ states('input_text.tank_level_status') }}"
+  is_startup: "{{ trigger.platform == 'homeassistant' }}"
+  is_status_change: "{{ level_status != previous_status }}"
+  last_notification_time: "{{ states('input_datetime.tank_notification_cooldown') }}"
+  time_diff: >-
+    {% if last_notification_time != 'unavailable' and last_notification_time !=
+    'unknown' %}
+      {{ (as_timestamp(now()) - as_timestamp(last_notification_time)) / 60 }}
+    {% else %}
+      9999
+    {% endif %}
+  cooldown_passed: "{{ time_diff > 60 }}"
+  critical_cooldown_passed: "{{ time_diff > 15 }}"
+  should_notify: |-
+    {% if level_status == 'Critical' %}
+      {{ is_status_change and critical_cooldown_passed }}
+    {% else %}
+      {{ is_status_change and cooldown_passed }}
+    {% endif %}
+  alexa_message: |-
+    {% if level_status == 'Critical' %}
+      Water tank is critically low at {{ current_level }}%. Please refill soon. चेतावनी! पानी की टंकी बहुत कम है।
+    {% elif level_status == 'Low' %}
+      Water tank is low at {{ current_level }}%. पानी की टंकी कम हो रही है।
+    {% elif level_status == 'Medium' %}
+      Water tank is at medium level, {{ current_level }}%. पानी की टंकी आधी भरी है।
+    {% elif level_status == 'Good' %}
+      Water tank is at good level, {{ current_level }}%. पानी की टंकी सामान्य स्तर पर है।
+    {% elif level_status == 'Full' %}
+      Water tank is full at {{ current_level }}%. पानी की टंकी पूरी भर गई है।
+    {% else %}
+      Water tank level is {{ current_level }}%.
+    {% endif %}
+mode: single
