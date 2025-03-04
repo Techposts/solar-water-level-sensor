@@ -1,0 +1,334 @@
+esphome:
+  name: waterlevelesp32c3
+  friendly_name: "Water Level Tank Monitor"
+  platformio_options:
+    upload_speed: 921600
+    board_build.flash_mode: dio
+    
+
+esp32:
+  board: seeed_xiao_esp32c3
+  variant: esp32c3
+
+# Enable detailed logging
+logger:
+  level: DEBUG
+  logs:
+    ultrasonic: DEBUG
+    sensor: DEBUG
+
+# Enable Home Assistant API
+api:
+  encryption:
+    key: "jZ4iE6+HEbIKOrNp19q85vQi4BQ9bZf312Q4SNjIamQ="
+
+ota:
+  - platform: esphome
+    password: "f4e32e4e0d6930781b5aa5710c1c257e"
+
+wifi:
+  ssid: "Terrace_EXT"
+  password: "9716582452"
+  # Enable fallback hotspot (captive portal) in case wifi connection fails
+  ap:
+    ssid: "Waterlevelesp32C3"
+    password: "9716582452"
+
+captive_portal:
+
+# Time component for timestamps
+time:
+  - platform: sntp
+    id: sntp_time
+    timezone: "Asia/Kolkata"
+    servers:
+      - 0.pool.ntp.org
+      - 1.pool.ntp.org
+    on_time_sync:
+      then:
+        logger.log: "Time synchronized with NTP servers"
+
+# Enhanced web server configuration
+web_server:
+  port: 80
+  local: true
+  version: 3
+  include_internal: false  # Save memory
+  css_url: ""  # Use default CSS
+  js_url: ""   # Use default JS
+  
+  # Define custom groups for better organization
+  sorting_groups:
+    - id: water_tank_group
+      name: "Water Tank Monitoring"
+      sorting_weight: 10
+    
+    - id: system_info_group
+      name: "System Information"
+      sorting_weight: 50
+    
+    - id: controls_group
+      name: "Controls & Actions"
+      sorting_weight: 20
+
+# Sensors
+sensor:
+  # Ultrasonic sensor with your specific settings
+  - platform: ultrasonic
+    trigger_pin: GPIO01
+    echo_pin: GPIO03
+    unit_of_measurement: "%"
+    icon: "mdi:water-percent"
+    name: "Sweet Water Storage"
+    id: water_level_sensor
+    accuracy_decimals: 0
+    pulse_time: 10us    # Correct pulse timing for AJ-SR04 Mode 1
+    timeout: 3m         # Max distance range
+    update_interval: 14000ms
+    
+    web_server:
+      sorting_group_id: water_tank_group
+      sorting_weight: -1
+    
+    filters:
+      - lambda: |-
+          // Better error handling for ultrasonic sensor
+          if (isnan(x) || x < 0.10 || x > 4.0) {
+            // Value is outside of reasonable range or NaN
+            return NAN;  // Will be caught by filter_out
+          }
+          
+          // Calculations based on corrected tank dimensions:
+          // Total tank height: 46 inches (1.1684 meters)
+          // Sensor mounting height: 42 inches (1.0668 meters)
+          // Diameter: 138 inches (3.5052 meters)
+          // Total volume: 2000 liters
+          
+          float distance = x;  // Current distance reading in meters
+          float full_reading = 0.20;  // 20cm - This is when tank is considered FULL
+          
+          // Distance from sensor to tank bottom when empty
+          float mount_from_top = 0.1016;  // 4 inches in meters
+          float total_tank_height = 1.1684;  // 46 inches in meters
+          float distance_to_bottom = total_tank_height - mount_from_top;  // 42 inches (1.0668m)
+          
+          // When tank is empty, reading would be full_reading + distance_to_bottom
+          float empty_reading = full_reading + distance_to_bottom;
+          
+          // Calculate percentage based on the current reading
+          float percentage = 0;
+          
+          if (distance <= full_reading) {
+            // Reading is at or below 20cm, tank is full
+            percentage = 100.0;
+          } else if (distance >= empty_reading) {
+            // Reading is at or beyond empty point
+            percentage = 0.0;
+          } else {
+            // Calculate percentage based on the range between full and empty readings
+            percentage = 100.0 * (empty_reading - distance) / (empty_reading - full_reading);
+          }
+          
+          return percentage;
+      - filter_out: nan
+      - clamp:
+          min_value: 0
+          max_value: 100
+      # Reduce window size to conserve memory
+      - sliding_window_moving_average:
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
+      # Add a default value for when sensor fails
+      - heartbeat: 60s
+      - lambda: |-
+          // If value is NaN, send the last known value or 0
+          if (isnan(x)) {
+            return 0.0;  // Default value when sensor fails
+          }
+          return x;
+  
+  # Estimated water volume with error handling
+  - platform: template
+    name: "Estimated Water Volume"
+    id: water_volume
+    unit_of_measurement: "L"
+    icon: "mdi:water"
+    accuracy_decimals: 0
+    update_interval: 30s
+    lambda: |-
+      float level_percent = id(water_level_sensor).state;
+      // Check if level is valid before calculating
+      if (isnan(level_percent) || level_percent < 0) {
+        return 0.0;  // Default to 0 if invalid
+      }
+      
+      // Tank dimensions
+      float total_tank_height = 1.1684;  // 46 inches in meters
+      float tank_diameter = 3.5052;     // 138 inches in meters
+      float max_volume = 2000.0;        // Total volume in liters
+      
+      // For cylindrical tank, volume is proportional to height
+      // This assumes a perfectly cylindrical tank
+      return (level_percent / 100.0) * max_volume;
+    web_server:
+      sorting_group_id: water_tank_group
+      sorting_weight: 5
+  
+  # Raw distance calculation with error handling
+  - platform: template
+    name: "Raw Distance"
+    id: raw_distance
+    unit_of_measurement: "m"
+    icon: "mdi:ruler"
+    update_interval: 30s
+    accuracy_decimals: 2
+    lambda: |-
+      float level_percent = id(water_level_sensor).state;
+      // Check if level is valid before calculating
+      if (isnan(level_percent) || level_percent < 0) {
+        return 0.0;  // Default to 0 if invalid
+      }
+      
+      if (level_percent >= 0 && level_percent <= 100) {
+        // Calculate the raw distance based on corrected tank dimensions
+        float full_reading = 0.20;  // 20cm - when tank is considered FULL
+        float mount_from_top = 0.1016;  // 4 inches in meters
+        float total_tank_height = 1.1684;  // 46 inches in meters
+        float distance_to_bottom = total_tank_height - mount_from_top;  // 42 inches (1.0668m)
+        float empty_reading = full_reading + distance_to_bottom;
+        
+        // Convert percentage to distance reading
+        // At 100% full: distance = full_reading (0.20m)
+        // At 0% full: distance = empty_reading (full_reading + distance_to_bottom)
+        float calculated_distance = full_reading + ((100.0 - level_percent) / 100.0) * (empty_reading - full_reading);
+        
+        return calculated_distance;
+      } else {
+        return 0.0;
+      }
+    web_server:
+      sorting_group_id: system_info_group
+      sorting_weight: 30
+  
+  # WiFi signal strength
+  - platform: wifi_signal
+    name: "WiFi Signal Strength"
+    update_interval: 60s
+    id: wifi_signal_sensor
+    web_server:
+      sorting_group_id: system_info_group
+      sorting_weight: 10
+  
+  # Uptime sensor
+  - platform: uptime
+    name: "Uptime"
+    id: uptime_sensor
+    update_interval: 60s
+    filters:
+      - lambda: return x / 3600.0; # Convert to hours
+    unit_of_measurement: "hours"
+    web_server:
+      sorting_group_id: system_info_group
+      sorting_weight: 20
+
+# Text sensors
+text_sensor:
+  # Tank status with improved error handling
+  - platform: template
+    name: "Tank Status"
+    id: tank_status_sensor
+    icon: "mdi:water-alert"
+    update_interval: 30s
+    
+    lambda: |-
+      float level = id(water_level_sensor).state;
+      
+      // Check if the sensor is giving valid readings
+      if (isnan(level)) {
+        return {"Unknown - Sensor may be offline"};
+      }
+      
+      // Better range handling
+      if (level <= 0) {
+        return {"Critical - Empty or Sensor Error"};
+      } else if (level >= 90) {
+        return {"Full - No action needed"};
+      } else if (level >= 75) {
+        return {"Good - Water level is sufficient"};
+      } else if (level >= 50) {
+        return {"Medium - Consider refilling soon"};
+      } else if (level >= 25) {
+        return {"Low - Refill recommended"};
+      } else {
+        return {"Critical - Immediate refill required"};
+      }
+    
+    web_server:
+      sorting_group_id: water_tank_group
+      sorting_weight: 2
+  
+  # Last updated timestamp using ESPHome time component
+  - platform: template
+    name: "Last Updated"
+    id: last_updated
+    icon: "mdi:clock-outline"
+    update_interval: 60s
+    lambda: |-
+      char buffer[20];
+      // Use id(sntp_time) instead of global time function
+      auto time = id(sntp_time).now();
+      snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d", 
+               time.year, time.month, time.day_of_month,
+               time.hour, time.minute);
+      return {buffer};
+    web_server:
+      sorting_group_id: system_info_group
+      sorting_weight: 5
+
+# Binary sensors for alerts
+binary_sensor:
+  # Low water level alert
+  - platform: template
+    name: "Low Water Alert"
+    id: low_water_alert
+    device_class: problem
+    lambda: |-
+      float level = id(water_level_sensor).state;
+      if (isnan(level)) return false;  // No alert if sensor is offline
+      return level < 25.0;
+    web_server:
+      sorting_group_id: water_tank_group
+      sorting_weight: 10
+    
+  # Full tank alert
+  - platform: template
+    name: "Tank Full"
+    id: tank_full_alert
+    device_class: moisture
+    lambda: |-
+      float level = id(water_level_sensor).state;
+      if (isnan(level)) return false;  // No alert if sensor is offline
+      return level >= 95.0;
+    web_server:
+      sorting_group_id: water_tank_group
+      sorting_weight: 15
+
+# Control buttons
+button:
+  - platform: restart
+    name: "Restart Device"
+    web_server:
+      sorting_group_id: controls_group
+      sorting_weight: 10
+  
+  - platform: template
+    name: "Refresh Sensor"
+    icon: "mdi:refresh"
+    on_press:
+      then:
+        - logger.log: "Manual sensor refresh triggered"
+        - component.update: water_level_sensor
+    web_server:
+      sorting_group_id: controls_group
+      sorting_weight: 5
