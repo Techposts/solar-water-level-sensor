@@ -2,7 +2,7 @@
 
 ## Overview
 This is a **solar-powered, wireless water level sensor** designed for **Home Assistant**. It utilizes an **ESP32-C3 Supermini** and an **AJ SR04M waterproof ultrasonic sensor** to measure and transmit water levels. The system runs on a **1S Li-ion battery**, charged via an **MPPT 6V module**, making it self-sufficient and maintenance-free.  
-
+![Smart solar water level sensor](https://raw.githubusercontent.com/Techposts/solar-water-level-sensor/refs/heads/main/Home-Assistant-Fluid-Card.png)
 This sensor has been **installed and tested for over 6 months**, operating reliably in real-world conditions.
 
 ## Features
